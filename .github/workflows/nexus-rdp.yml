@@ -1,0 +1,79 @@
+name: Nexus Windows RDP Deployment
+on: 
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/nexus-rdp.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      
+    - name: Setup Environment
+      run: |
+        Write-Host "╔════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║   NEXUS WINDOWS RDP v3.0           ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "[INFO] OS: Windows Server" -ForegroundColor Yellow
+        Write-Host "[INFO] Protocol: RDP (Remote Desktop)" -ForegroundColor Yellow
+        Write-Host "[INFO] Port: 3389" -ForegroundColor Yellow
+        Write-Host "[INFO] Visibility: PUBLIC" -ForegroundColor Yellow
+        
+    - name: Install Ngrok
+      run: |
+        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+        Move-Item .\ngrok.exe C:\Windows\System32\ngrok.exe -Force
+        
+    - name: Configure Ngrok
+      run: ngrok authtoken 3A1U8v4Hgshl3u7YbgmbDwX557U_2qkyufwhBM51Z3fXnhBjv
+      
+    - name: Configure RDP
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        
+    - name: Create User Account
+      run: |
+        $password = ConvertTo-SecureString "!" -AsPlainText -Force
+        New-LocalUser "runner" -Password $password -FullName "Nexus Admin" -Description "Auto-generated RDP User"
+        Add-LocalGroupMember -Group "Administrators" -Member "runner"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runner"
+        Write-Host "[SUCCESS] User runner created" -ForegroundColor Green
+        
+    - name: Disable Power Saving
+      run: |
+        powercfg /change monitor-timeout-ac 0
+        powercfg /change standby-timeout-ac 0
+        powercfg /change hibernate-timeout-ac 0
+        
+    - name: Establish Tunnel
+      run: |
+        Write-Host "[INFO] Starting Ngrok tunnel on port 3389..." -ForegroundColor Yellow
+        Start-Process ngrok -ArgumentList "tcp 3389" -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+        try {
+            $tunnel = Invoke-RestMethod http://localhost:4040/api/tunnels
+            Write-Host "[SUCCESS] RDP Tunnel Established!" -ForegroundColor Green
+            Write-Host "RDP Address: $($tunnel.tunnels.public_url)" -ForegroundColor Cyan
+            Write-Host "Username: runner" -ForegroundColor Cyan
+            Write-Host "Password: !" -ForegroundColor Cyan
+            Write-Host "[INFO] Connect using Windows Remote Desktop Client" -ForegroundColor Yellow
+        } catch {
+            Write-Host "[ERROR] Failed to get tunnel info" -ForegroundColor Red
+        }
+        
+    - name: Keep Alive
+      run: |
+        Write-Host "[INFO] Session active for 6 hours max..." -ForegroundColor Yellow
+        for ($i = 360; $i -gt 0; $i--) {
+            Write-Host "Time remaining: $i minutes" -ForegroundColor Gray
+            Start-Sleep -Seconds 60
+        }
