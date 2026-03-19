@@ -1,0 +1,91 @@
+name: Nexus macOS VNC Deployment
+on: 
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/nexus-vnc.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: macos-12
+    timeout-minutes: 360
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      
+    - name: Setup Environment
+      run: |
+        echo "╔════════════════════════════════════╗"
+        echo "║   NEXUS macOS VNC v3.0             ║"
+        echo "╚════════════════════════════════════╝"
+        echo "[INFO] OS: macOS 12 (Monterey - Stable VNC Support)"
+        echo "[INFO] Protocol: VNC (Screen Sharing)"
+        echo "[INFO] Port: 5900"
+        echo "[INFO] Visibility: PUBLIC"
+        
+    - name: Install Ngrok
+      run: |
+        brew install ngrok
+        
+    - name: Configure Ngrok
+      run: ngrok authtoken 3A1U8v4Hgshl3u7YbgmbDwX557U_2qkyufwhBM51Z3fXnhBjv
+      
+    - name: Configure VNC / Screen Sharing
+      run: |
+        echo "[INFO] Disabling Firewall to ensure VNC port is open..."
+        sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
+        
+        echo "[INFO] Enabling Remote Management and VNC Legacy..."
+        sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
+        sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
+        
+        echo "[INFO] Setting VNC password..."
+        echo "Nexus@20" | perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA" } $_ = <>; chomp; s/^(.{8}).*/$1/; @p = unpack "C*", $_; my $i = 0; foreach (@p) { printf "\%02X", $_ = (($_ >> 1) & 0x55) | (($_ << 1) & 0xAA) ^ $k[$i++]; } print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
+        
+        echo "[INFO] Restarting ARD Agent and Screen Sharing..."
+        sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -restart -agent
+        
+        echo "[SUCCESS] VNC configured on port 5900 using Legacy Authentication"
+        
+    - name: Create User Account
+      run: |
+        echo "[INFO] Setting up user: runner"
+        sudo sysadminctl -addUser runner -password "Nexus@2024!" -admin
+        echo "[SUCCESS] User runner created with admin privileges"
+        
+    - name: Disable Sleep
+      run: |
+        echo "[INFO] Disabling sleep mode..."
+        sudo pmset -a sleep 0
+        sudo pmset -a hibernatemode 0
+        sudo pmset -a disablesleep 1
+        echo "[SUCCESS] Sleep disabled"
+        
+    - name: Establish Tunnel
+      run: |
+        echo "[INFO] Starting Ngrok tunnel on port 5900..."
+        ngrok tcp 5900 &
+        sleep 10
+        
+        TUNNEL_INFO=$(curl -s http://localhost:4040/api/tunnels)
+        if [ -n "$TUNNEL_INFO" ]; then
+          echo "[SUCCESS] VNC Tunnel Established!"
+          echo "========================================"
+          echo "VNC Address: $(echo $TUNNEL_INFO | grep -o 'tcp://[^"]*' | head -1)"
+          echo "Username: runner"
+          echo "Password: Nexus@20 (VNC limited to 8 chars)"
+          echo "========================================"
+          echo "[INFO] Connect using any standard VNC Viewer (RealVNC, bVNC)"
+        else
+          echo "[ERROR] Failed to establish tunnel"
+        fi
+        
+    - name: Keep Alive
+      run: |
+        echo "[INFO] Session active for 6 hours max..."
+        for i in $(seq 360 -1 1); do
+          echo "Time remaining: $i minutes"
+          sleep 60
+        done
